@@ -24,11 +24,144 @@ def constrain(x, min_val, max_val):
     '''
     return max(min_val, min(max_val, x))
 
-class Picarx(object):
+class Sensing(object):
     CONFIG = '/opt/picar-x/picar-x.conf'
-
     DEFAULT_LINE_REF = [1000, 1000, 1000]
     DEFAULT_CLIFF_REF = [500, 500, 500]
+
+    def __init__(self, 
+                grayscale_pins:list=['A0', 'A1', 'A2'],
+                config:str=CONFIG,
+                ):
+
+          # reset robot_hat
+        utils.reset_mcu()
+        time.sleep(0.2)
+    
+    # --------- config_flie ---------
+        self.config_flie = fileDB(config, 777, os.getlogin())
+
+    # --------- grayscale module init ---------
+        adc0, adc1, adc2 = [ADC(pin) for pin in grayscale_pins]
+        self.grayscale = Grayscale_Module(adc0, adc1, adc2, reference=None)
+        # get reference
+        self.line_reference = self.config_flie.get("line_reference", default_value=str(self.DEFAULT_LINE_REF))
+        self.line_reference = [float(i) for i in self.line_reference.strip().strip('[]').split(',')]
+        self.cliff_reference = self.config_flie.get("cliff_reference", default_value=str(self.DEFAULT_CLIFF_REF))
+        self.cliff_reference = [float(i) for i in self.cliff_reference.strip().strip('[]').split(',')]
+        # transfer reference
+        self.grayscale.reference(self.line_reference)
+
+    def get_grayscale_data(self):
+        return list.copy(self.grayscale.read())
+
+    def get_line_status(self,gm_val_list):
+        return self.grayscale.read_status(gm_val_list)
+
+    def set_line_reference(self, value):
+        self.set_grayscale_reference(value)    
+
+    def set_grayscale_reference(self, value):
+        if isinstance(value, list) and len(value) == 3:
+            self.line_reference = value
+            self.grayscale.reference(self.line_reference)
+            self.config_flie.set("line_reference", self.line_reference)
+        else:
+            raise ValueError("grayscale reference must be a 1*3 list")
+    
+    def get_cliff_status(self,gm_val_list):
+        for i in range(0,3):
+            if gm_val_list[i]<=self.cliff_reference[i]:
+                return True
+        return False
+
+    def set_cliff_reference(self, value):
+        if isinstance(value, list) and len(value) == 3:
+            self.cliff_reference = value
+            self.config_flie.set("cliff_reference", self.cliff_reference)
+        else:
+            raise ValueError("grayscale reference must be a 1*3 list")
+
+class Intrepet(object):
+    CONFIG = '/opt/picar-x/picar-x.conf'
+    DEFAULT_LINE_REF = [1000, 1000, 1000]
+    DEFAULT_CLIFF_REF = [500, 500, 500]
+    EDGE_THRESHOLD = .01  # Threshold for detecting a sharp change
+
+    def __init__(self, 
+                config:str=CONFIG,
+                ):
+
+          # reset robot_hat
+        utils.reset_mcu()
+        time.sleep(0.2)
+
+        # --------- config_flie ---------
+        self.config_flie = fileDB(config, 777, os.getlogin())
+
+        # get reference
+        self.line_reference = self.config_flie.get("line_reference", default_value=str(self.DEFAULT_LINE_REF))
+        self.line_reference = [float(i) for i in self.line_reference.strip().strip('[]').split(',')]
+        self.cliff_reference = self.config_flie.get("cliff_reference", default_value=str(self.DEFAULT_CLIFF_REF))
+        self.cliff_reference = [float(i) for i in self.cliff_reference.strip().strip('[]').split(',')]
+        # transfer reference
+        #self.grayscale.reference(self.line_reference)
+
+    def process_sensor_data(self, sensor_values, target_is_darker=True):
+        
+        # Normalizing sensor values against the line reference
+        normalized_values = [value / ref for value, ref in zip(sensor_values, self.line_reference)]
+        print(normalized_values)
+        # Detecting edge and its location
+        edge_detected = False
+        edge_index = -1
+        for i in range(len(normalized_values) - 1):
+            if target_is_darker:
+                if normalized_values[i] - normalized_values[i + 1] > self.EDGE_THRESHOLD:
+                    edge_detected = True
+                    edge_index = i
+                    break
+            else:
+                if normalized_values[i + 1] - normalized_values[i] > self.EDGE_THRESHOLD:
+                    edge_detected = True
+                    edge_index = i
+                    break
+
+        # Determining position relative to the line
+        position = 0
+        if edge_detected:
+            print("edge detected")
+            # Assuming 3 sensors, adjust as necessary
+            if edge_index == 0:
+                position = -1  # Far left
+            elif edge_index == 1:
+                position = -0.5 if normalized_values[0] < normalized_values[2] else 0.5  # Slightly off-center
+            else:
+                position = 1  # Far right
+
+        return position
+
+    def get_line_status(self,gm_val_list):
+        return self.grayscale.read_status(gm_val_list)
+
+    def set_line_reference(self, value):
+        self.set_grayscale_reference(value)    
+    
+    def get_cliff_status(self,gm_val_list):
+        for i in range(0,3):
+            if gm_val_list[i]<=self.cliff_reference[i]:
+                return True
+        return False
+
+    def set_cliff_reference(self, value):
+        if isinstance(value, list) and len(value) == 3:
+            self.cliff_reference = value
+            self.config_flie.set("cliff_reference", self.cliff_reference)
+        else:
+            raise ValueError("grayscale reference must be a 1*3 list")
+
+class Picarx(object):
+    CONFIG = '/opt/picar-x/picar-x.conf'
 
     DIR_MIN = -30
     DIR_MAX = 30
@@ -49,7 +182,6 @@ class Picarx(object):
     def __init__(self, 
                 servo_pins:list=['P0', 'P1', 'P2'], 
                 motor_pins:list=['D4', 'D5', 'P12', 'P13'],
-                grayscale_pins:list=['A0', 'A1', 'A2'],
                 ultrasonic_pins:list=['D2','D3'],
                 config:str=CONFIG,
                 ):
@@ -74,6 +206,7 @@ class Picarx(object):
         self.cam_pan.angle(self.cam_pan_cali_val)
         self.cam_tilt.angle(self.cam_tilt_cali_val)
 
+        
         # --------- motors init ---------
         self.left_rear_dir_pin = Pin(motor_pins[0])
         self.right_rear_dir_pin = Pin(motor_pins[1])
@@ -90,17 +223,6 @@ class Picarx(object):
         for pin in self.motor_speed_pins:
             pin.period(self.PERIOD)
             pin.prescaler(self.PRESCALER)
-
-        # --------- grayscale module init ---------
-        adc0, adc1, adc2 = [ADC(pin) for pin in grayscale_pins]
-        self.grayscale = Grayscale_Module(adc0, adc1, adc2, reference=None)
-        # get reference
-        self.line_reference = self.config_flie.get("line_reference", default_value=str(self.DEFAULT_LINE_REF))
-        self.line_reference = [float(i) for i in self.line_reference.strip().strip('[]').split(',')]
-        self.cliff_reference = self.config_flie.get("cliff_reference", default_value=str(self.DEFAULT_CLIFF_REF))
-        self.cliff_reference = [float(i) for i in self.cliff_reference.strip().strip('[]').split(',')]
-        # transfer reference
-        self.grayscale.reference(self.line_reference)
 
         # --------- ultrasonic init ---------
         tring, echo= ultrasonic_pins
@@ -225,35 +347,6 @@ class Picarx(object):
     def get_distance(self):
         return self.ultrasonic.read()
 
-    def set_grayscale_reference(self, value):
-        if isinstance(value, list) and len(value) == 3:
-            self.line_reference = value
-            self.grayscale.reference(self.line_reference)
-            self.config_flie.set("line_reference", self.line_reference)
-        else:
-            raise ValueError("grayscale reference must be a 1*3 list")
-
-    def get_grayscale_data(self):
-        return list.copy(self.grayscale.read())
-
-    def get_line_status(self,gm_val_list):
-        return self.grayscale.read_status(gm_val_list)
-
-    def set_line_reference(self, value):
-        self.set_grayscale_reference(value)
-
-    def get_cliff_status(self,gm_val_list):
-        for i in range(0,3):
-            if gm_val_list[i]<=self.cliff_reference[i]:
-                return True
-        return False
-
-    def set_cliff_reference(self, value):
-        if isinstance(value, list) and len(value) == 3:
-            self.cliff_reference = value
-            self.config_flie.set("cliff_reference", self.cliff_reference)
-        else:
-            raise ValueError("grayscale reference must be a 1*3 list")
 #Forward and backwards in straigt lines with different angles 0 = forward 1 = backward
     def f_b(self, direction, angle, speed, duration):
         a = angle
@@ -300,10 +393,17 @@ class Picarx(object):
 
 if __name__ == "__main__":
     px = Picarx()
+    s = Sensing()
+    i = Intrepet()
     """px.forward(50)
     time.sleep(5)
     px.backward(50)
     time.sleep(5)
     px.stop() """
     #px.f_b(1, 0, 50, 5)
-    px.parallelParking(0)
+    #px.parallelParking(0)
+    g_data = s.get_grayscale_data()
+    print(g_data)
+
+    position = i.process_sensor_data(g_data)
+    print(position)
