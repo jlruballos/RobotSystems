@@ -1,10 +1,24 @@
-from robot_hat import Pin, ADC, PWM, Servo, fileDB
+""" from robot_hat import Pin, ADC, PWM, Servo, fileDB
 from robot_hat import Grayscale_Module, Ultrasonic, utils
 from robot_hat.utils import reset_mcu, run_command
 import time
 import os
 import math
 import logging 
+import atexit """
+
+import time
+import os
+import math
+try:
+    from robot_hat import Pin, ADC, PWM, Servo, fileDB
+    from robot_hat import Grayscale_Module, Ultrasonic
+    from robot_hat.utils import reset_mcu, run_command
+except ImportError:
+    from sim_robot_hat import Pin, ADC, PWM, Servo, fileDB
+    from sim_robot_hat import Grayscale_Module, Ultrasonic
+    from sim_robot_hat.utils import reset_mcu, run_command
+import logging
 import atexit
 
 logging_format = "%(asctime)s: %(message)s"
@@ -35,7 +49,7 @@ class Sensing(object):
                 ):
 
           # reset robot_hat
-        utils.reset_mcu()
+        reset_mcu()
         time.sleep(0.2)
     
     # --------- config_flie ---------
@@ -45,29 +59,29 @@ class Sensing(object):
         adc0, adc1, adc2 = [ADC(pin) for pin in grayscale_pins]
         self.grayscale = Grayscale_Module(adc0, adc1, adc2, reference=None)
         # get reference
-        self.line_reference = self.config_flie.get("line_reference", default_value=str(self.DEFAULT_LINE_REF))
-        self.line_reference = [float(i) for i in self.line_reference.strip().strip('[]').split(',')]
+        #self.line_reference = self.config_flie.get("line_reference", default_value=str(self.DEFAULT_LINE_REF))
+       # self.line_reference = [float(i) for i in self.line_reference.strip().strip('[]').split(',')]
         self.cliff_reference = self.config_flie.get("cliff_reference", default_value=str(self.DEFAULT_CLIFF_REF))
         self.cliff_reference = [float(i) for i in self.cliff_reference.strip().strip('[]').split(',')]
         # transfer reference
-        self.grayscale.reference(self.line_reference)
+        #self.grayscale.reference(self.line_reference)
 
     def get_grayscale_data(self):
         return list.copy(self.grayscale.read())
 
-    def get_line_status(self,gm_val_list):
-        return self.grayscale.read_status(gm_val_list)
+    #def get_line_status(self,gm_val_list):
+     #   return self.grayscale.read_status(gm_val_list)
 
-    def set_line_reference(self, value):
-        self.set_grayscale_reference(value)    
+    #def set_line_reference(self, value):
+     #   self.set_grayscale_reference(value)    
 
-    def set_grayscale_reference(self, value):
-        if isinstance(value, list) and len(value) == 3:
-            self.line_reference = value
-            self.grayscale.reference(self.line_reference)
-            self.config_flie.set("line_reference", self.line_reference)
-        else:
-            raise ValueError("grayscale reference must be a 1*3 list")
+    #def set_grayscale_reference(self, value):
+     #   if isinstance(value, list) and len(value) == 3:
+      #      self.line_reference = value
+       #     self.grayscale.reference(self.line_reference)
+        #    self.config_flie.set("line_reference", self.line_reference)
+        #else:
+         #   raise ValueError("grayscale reference must be a 1*3 list")
     
     def get_cliff_status(self,gm_val_list):
         for i in range(0,3):
@@ -86,14 +100,14 @@ class Intrepet(object):
     CONFIG = '/opt/picar-x/picar-x.conf'
     DEFAULT_LINE_REF = [1000, 1000, 1000]
     DEFAULT_CLIFF_REF = [500, 500, 500]
-    EDGE_THRESHOLD = .01  # Threshold for detecting a sharp change
+    EDGE_THRESHOLD = 0.01  # Threshold for detecting a sharp change
 
     def __init__(self, 
                 config:str=CONFIG,
                 ):
 
           # reset robot_hat
-        utils.reset_mcu()
+        reset_mcu()
         time.sleep(0.2)
 
         # --------- config_flie ---------
@@ -109,35 +123,69 @@ class Intrepet(object):
 
     def process_sensor_data(self, sensor_values, target_is_darker=True):
         
-        # Normalizing sensor values against the line reference
-        normalized_values = [value / ref for value, ref in zip(sensor_values, self.line_reference)]
-        print(normalized_values)
-        # Detecting edge and its location
-        edge_detected = False
-        edge_index = -1
-        for i in range(len(normalized_values) - 1):
-            if target_is_darker:
-                if normalized_values[i] - normalized_values[i + 1] > self.EDGE_THRESHOLD:
-                    edge_detected = True
-                    edge_index = i
-                    break
-            else:
-                if normalized_values[i + 1] - normalized_values[i] > self.EDGE_THRESHOLD:
-                    edge_detected = True
-                    edge_index = i
-                    break
+        #Normalizing sensor values against the line reference
+        #normalized_values = [sensor_values[i] / self.line_reference[i] for i in range(len(sensor_values))]
+        #print(normalized_values)
+        
+        #Find Average of the sensor values
+        l = len(sensor_values)
+        s = sum(sensor_values)
+        avg=s/l
+        #print(avg)
 
-        # Determining position relative to the line
+        #Normalize the sensor values
+        if avg != 0:
+            normalized_values = [sensor_values / avg for sensor_values in sensor_values]
+        else:
+            normalized_values = [0 for _ in sensor_values]  
+        
+        #print(normalized_values)
+
+        total_norm = sum(normalized_values)
+        norm_val_avg = total_norm/3
+        #print(norm_val_avg)
+        #differnce betwen first and last sensor
+        sensor_range = normalized_values[0]-normalized_values[2]
+        #print(sensor_range)
+        #differences of adjacent values in a list
+        #differences = [abs(normalized_values[i+1] - normalized_values[i]) for i in range(len(normalized_values) - 1)]
+        differences = [normalized_values[i+1] - normalized_values[i] for i in range(len(normalized_values) - 1)]
+        #print(differences)
+
+        avg_diff = (differences[0]+differences[1])/2
+        if avg_diff != 0:
+            norm_diff = [differences / avg_diff for differences in differences]
+        else:
+        # Handle the case where avg_diff is zero
+        # For example, you might set norm_diff to a list of zeros of the same length as differences
+            norm_diff = [0 for _ in differences]
+        #print(norm_diff)
+        if norm_val_avg != 0:
+            norm_avg_diff = [differences / norm_val_avg for differences in differences]
+        else:
+            norm_avg_diff = [0 for _ in differences]  # Example: setting all elements to 0
+        
+        #print(norm_avg_diff)
+
+        # Detecting edge and its location
         position = 0
-        if edge_detected:
-            print("edge detected")
-            # Assuming 3 sensors, adjust as necessary
-            if edge_index == 0:
-                position = -1  # Far left
-            elif edge_index == 1:
-                position = -0.5 if normalized_values[0] < normalized_values[2] else 0.5  # Slightly off-center
-            else:
-                position = 1  # Far right
+        
+        if sensor_range < -self.EDGE_THRESHOLD:
+        # Check the first element for LEFT or SLIGHT_LEFT
+            if abs(norm_avg_diff[0]) > self.EDGE_THRESHOLD:
+                #print("LEFT")
+                position  = 1
+            if abs(norm_avg_diff[0]) < self.EDGE_THRESHOLD:
+                #print("SLIGHT_LEFT")
+                position= 0.5
+        if sensor_range > self.EDGE_THRESHOLD:
+        # Check the second element for RIGHT or SLIGHT_RIGHT
+            if abs(norm_avg_diff[1]) > self.EDGE_THRESHOLD:
+                #print("RIGHT")
+                position= -1
+            if abs(norm_avg_diff[1]) < self.EDGE_THRESHOLD:
+                #print("SLIGHT_RIGHT")
+                position= -0.5
 
         return position
 
@@ -187,7 +235,7 @@ class Picarx(object):
                 ):
 
         # reset robot_hat
-        utils.reset_mcu()
+        reset_mcu()
         time.sleep(0.2)
 
         # --------- config_flie ---------
@@ -390,11 +438,38 @@ class Picarx(object):
         self.f_b(1, 0, 0, d)
         self.f_b(0, -30, 50, 1.1)
 
+class Controller(Picarx):
+    
+    def __init__(self):
+        super().__init__()  # Call to the superclass's constructor, if necessary
+
+    def steering_angle(self, position):
+        MAX_ANGLE = 30
+        MIN_ANGLE = 20
+        angle = 0
+        if position == 1:
+            self.set_dir_servo_angle(-MAX_ANGLE)
+            angle = -MAX_ANGLE
+        elif position == 0.5:
+            self.set_dir_servo_angle(-MIN_ANGLE)
+            angle = -MIN_ANGLE
+        elif position == -1:
+            self.set_dir_servo_angle(MAX_ANGLE)
+            angle = MAX_ANGLE
+        elif position == -0.5:
+            self.set_dir_servo_angle(MIN_ANGLE)
+            angle = MIN_ANGLE
+        elif position == 0:
+            self.set_dir_servo_angle(0)
+            angle = 0
+        return angle
+
 
 if __name__ == "__main__":
     px = Picarx()
     s = Sensing()
     i = Intrepet()
+    c = Controller()
     """px.forward(50)
     time.sleep(5)
     px.backward(50)
@@ -402,8 +477,24 @@ if __name__ == "__main__":
     px.stop() """
     #px.f_b(1, 0, 50, 5)
     #px.parallelParking(0)
-    g_data = s.get_grayscale_data()
+    '''while True:
+        g_data = s.get_grayscale_data()
+        print(g_data)
+        time.sleep(0.5)'''
+    '''g_data = s.get_grayscale_data()
     print(g_data)
-
     position = i.process_sensor_data(g_data)
-    print(position)
+    angle = c.steering_angle(position)
+    print (angle)
+    print(position)'''
+    while True:
+        g_data = s.get_grayscale_data()
+        #print(g_data)
+        position = i.process_sensor_data(g_data)
+        #print(position)
+        angle = c.steering_angle(position)
+        #print(angle)
+        px.forward(30)
+        
+        #time.sleep(0.5)
+
