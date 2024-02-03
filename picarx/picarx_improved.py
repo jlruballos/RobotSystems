@@ -20,6 +20,9 @@ except ImportError:
     from sim_robot_hat.utils import reset_mcu, run_command
 import logging
 import atexit
+import broadcast
+import consumer_producers
+import concurrent.futures
 
 logging_format = "%(asctime)s: %(message)s"
 logging.basicConfig(format=logging_format, level=logging.INFO,
@@ -65,6 +68,15 @@ class Sensing(object):
     def get_grayscale_data(self):
         return list.copy(self.grayscale.read())
     
+    def producer(self, bus, delay):
+    
+        while True:
+            # Grey scale sensor data production
+            sensor_data = self.get_grayscale_data() 
+            logging.debug(sensor_data)
+            bus.write(sensor_data)
+            time.sleep(delay)
+    
     def get_cliff_status(self,gm_val_list):
         for i in range(0,3):
             if gm_val_list[i]<=self.cliff_reference[i]:
@@ -82,7 +94,7 @@ class Intrepet(object):
     CONFIG = '/opt/picar-x/picar-x.conf'
     DEFAULT_LINE_REF = [1000, 1000, 1000]
     DEFAULT_CLIFF_REF = [500, 500, 500]
-    EDGE_THRESHOLD = 0.005  # Threshold for detecting a sharp change
+    EDGE_THRESHOLD = 0.009  # Threshold for detecting a sharp change
 
     def __init__(self, 
                 config:str=CONFIG,
@@ -158,6 +170,19 @@ class Intrepet(object):
                 position= p*-0.5
 
         return position
+
+    def consumer_producer(self, input_bus, output_bus, delay):
+    
+        while True:
+            # Read data from input bus
+            data = input_bus.read()
+            if data is not None:
+                # Process the data
+                processed_data = self.process_sensor_data(data,0) 
+                logging.debug(processed_data)
+                # Write the processed data to the output bus
+                output_bus.write(processed_data)
+            time.sleep(delay)
 
     def get_line_status(self,gm_val_list):
         return self.grayscale.read_status(gm_val_list)
@@ -411,25 +436,41 @@ class Controller(Picarx):
         super().__init__() 
 
     def steering_angle(self, position):
-        MAX_ANGLE = 30
-        MIN_ANGLE = 20
+        MAX_ANGLE = 25
+        MIN_ANGLE = 15
         angle = 0
         if position == 1:
             self.set_dir_servo_angle(-MAX_ANGLE)
             angle = -MAX_ANGLE
+            logging.debug(angle)
         elif position == 0.5:
             self.set_dir_servo_angle(-MIN_ANGLE)
+            logging.debug(angle)
             angle = -MIN_ANGLE
         elif position == -1:
             self.set_dir_servo_angle(MAX_ANGLE)
+            logging.debug(angle)
             angle = MAX_ANGLE
         elif position == -0.5:
             self.set_dir_servo_angle(MIN_ANGLE)
+            logging.debug(angle)
             angle = MIN_ANGLE
         elif position == 0:
             self.set_dir_servo_angle(0)
+            logging.debug(angle)
             angle = 0
-        return angle
+
+        #return angle
+    
+    def consumer(self, bus, delay):
+
+        while True:
+            # Read processed data from bus
+            data = bus.read()
+            if data is not None:
+                # Act on the data
+                self.steering_angle(data)
+            time.sleep(delay)
 
 
 if __name__ == "__main__":
@@ -437,24 +478,30 @@ if __name__ == "__main__":
     s = Sensing()
     i = Intrepet()
     c = Controller()
-    """px.forward(50)
-    time.sleep(5)
-    px.backward(50)
-    time.sleep(5)
-    px.stop() """
-    #px.f_b(1, 0, 50, 5)
-    #px.parallelParking(0)
+    bus = broadcast.broadcast()
+    sensor_values_bus = broadcast.broadcast()
+    interpreter_bus = broadcast.broadcast()
+
+    # Set delay times for each function
+    sensor_delay = 0.01
+    interpreter_delay = 0.02
+    control_delay = 0.03
+    
+    # Set up and run the functions concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        # Submit tasks to the executor
+        eSensor = executor.submit(s.producer, sensor_values_bus, sensor_delay)
+        eInterpreter =  executor.submit(i.consumer_producer, sensor_values_bus, interpreter_bus, interpreter_delay)
+        eControl = executor.submit(c.consumer, interpreter_bus, control_delay)
+        px.forward(30)
+        try:
+            # This will raise any exceptions caught by the executor
+            sensor_result = eSensor.result()
+            interpreter_result = eInterpreter.result()
+            control_result = eControl.result()
+        except Exception as e:
+            print(f"An error occurred: {e}")
     '''while True:
-        g_data = s.get_grayscale_data()
-        print(g_data)
-        time.sleep(0.5)'''
-    '''g_data = s.get_grayscale_data()
-    print(g_data)
-    position = i.process_sensor_data(g_data)
-    angle = c.steering_angle(position)
-    print (angle)
-    print(position)'''
-    while True:
         g_data = s.get_grayscale_data()
         
         position = i.process_sensor_data(g_data,0)
@@ -463,5 +510,5 @@ if __name__ == "__main__":
         
         px.forward(30)
         
-        #time.sleep(0.5)
+        #time.sleep(0.5)'''
 
