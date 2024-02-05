@@ -21,7 +21,6 @@ except ImportError:
 import logging
 import atexit
 import broadcast
-import consumer_producers
 import concurrent.futures
 
 logging_format = "%(asctime)s: %(message)s"
@@ -459,8 +458,6 @@ class Controller(Picarx):
             self.set_dir_servo_angle(0)
             logging.debug(angle)
             angle = 0
-
-        #return angle
     
     def consumer(self, bus, delay):
 
@@ -474,7 +471,6 @@ class Controller(Picarx):
 
 
 if __name__ == "__main__":
-    px = Picarx()
     s = Sensing()
     i = Intrepet()
     c = Controller()
@@ -493,7 +489,7 @@ if __name__ == "__main__":
         eSensor = executor.submit(s.producer, sensor_values_bus, sensor_delay)
         eInterpreter =  executor.submit(i.consumer_producer, sensor_values_bus, interpreter_bus, interpreter_delay)
         eControl = executor.submit(c.consumer, interpreter_bus, control_delay)
-        px.forward(30)
+        c.forward(30)
         try:
             # This will raise any exceptions caught by the executor
             sensor_result = eSensor.result()
@@ -501,14 +497,4 @@ if __name__ == "__main__":
             control_result = eControl.result()
         except Exception as e:
             print(f"An error occurred: {e}")
-    '''while True:
-        g_data = s.get_grayscale_data()
-        
-        position = i.process_sensor_data(g_data,0)
-        
-        angle = c.steering_angle(position)
-        
-        px.forward(30)
-        
-        #time.sleep(0.5)'''
 
