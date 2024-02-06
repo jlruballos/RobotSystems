@@ -1,12 +1,3 @@
-""" from robot_hat import Pin, ADC, PWM, Servo, fileDB
-from robot_hat import Grayscale_Module, Ultrasonic, utils
-from robot_hat.utils import reset_mcu, run_command
-import time
-import os
-import math
-import logging 
-import atexit """
-
 import time
 import os
 import math
@@ -474,7 +465,6 @@ if __name__ == "__main__":
     s = Sensing()
     i = Intrepet()
     c = Controller()
-    bus = broadcast.broadcast()
     sensor_values_bus = broadcast.broadcast()
     interpreter_bus = broadcast.broadcast()
 
