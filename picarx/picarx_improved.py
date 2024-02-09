@@ -13,6 +13,7 @@ import logging
 import atexit
 import broadcast
 import concurrent.futures
+import rossros as rr
 
 logging_format = "%(asctime)s: %(message)s"
 logging.basicConfig(format=logging_format, level=logging.INFO,
@@ -104,12 +105,12 @@ class Intrepet(object):
         self.cliff_reference = [float(i) for i in self.cliff_reference.strip().strip('[]').split(',')]
         # transfer reference
     #polarity = 0 dark on light, polarity = 1 light on dark
-    def process_sensor_data(self, sensor_values, polarity, target_is_darker=True):
-        p = 0
-        if polarity == 0:
-            p = 1
-        else :
-            p=-1
+    def process_sensor_data(self, sensor_values, target_is_darker=True):
+        #p = 0
+        #if polarity == 0:
+         #   p = 1
+        #else :
+         #   p=-1
         #Find Average of the sensor values
         l = len(sensor_values)
         s = sum(sensor_values)
@@ -149,15 +150,15 @@ class Intrepet(object):
         if sensor_range < -self.EDGE_THRESHOLD:
         # Check the first element for LEFT or SLIGHT_LEFT
             if abs(norm_avg_diff[0]) > self.EDGE_THRESHOLD:
-                position  = p*1
+                position  = 1
             if abs(norm_avg_diff[0]) < self.EDGE_THRESHOLD:
-                position= p*0.5
+                position= 0.5
         if sensor_range > self.EDGE_THRESHOLD:
         # Check the second element for RIGHT or SLIGHT_RIGHT
             if abs(norm_avg_diff[1]) > self.EDGE_THRESHOLD:
-                position= p*-1
+                position= -1
             if abs(norm_avg_diff[1]) < self.EDGE_THRESHOLD:
-                position= p*-0.5
+                position= -0.5
 
         return position
 
@@ -377,6 +378,17 @@ class Picarx(object):
     def get_distance(self):
         return self.ultrasonic.read()
 
+    def obstacle_avoidance(self):
+    
+        distance = self.get_distance()
+        logging.debug(distance)
+        if distance < 20:
+            Obstacle = True
+        else:
+            Obstacle = False
+            
+        return Obstacle
+
 #Forward and backwards in straigt lines with different angles 0 = forward 1 = backward
     def f_b(self, direction, angle, speed, duration):
         a = angle
@@ -425,30 +437,39 @@ class Controller(Picarx):
     def __init__(self):
         super().__init__() 
 
-    def steering_angle(self, position):
+    def steering_angle(self, position, obstacle):
         MAX_ANGLE = 25
         MIN_ANGLE = 15
         angle = 0
-        if position == 1:
-            self.set_dir_servo_angle(-MAX_ANGLE)
-            angle = -MAX_ANGLE
-            logging.debug(angle)
-        elif position == 0.5:
-            self.set_dir_servo_angle(-MIN_ANGLE)
-            logging.debug(angle)
-            angle = -MIN_ANGLE
-        elif position == -1:
-            self.set_dir_servo_angle(MAX_ANGLE)
-            logging.debug(angle)
-            angle = MAX_ANGLE
-        elif position == -0.5:
-            self.set_dir_servo_angle(MIN_ANGLE)
-            logging.debug(angle)
-            angle = MIN_ANGLE
-        elif position == 0:
-            self.set_dir_servo_angle(0)
-            logging.debug(angle)
-            angle = 0
+
+        if obstacle == False:
+            if position == 1:
+                self.set_dir_servo_angle(-MAX_ANGLE)
+                angle = -MAX_ANGLE
+                self.forward(30)
+                logging.debug(angle)
+            elif position == 0.5:
+                self.set_dir_servo_angle(-MIN_ANGLE)
+                logging.debug(angle)
+                angle = -MIN_ANGLE
+                self.forward(30)
+            elif position == -1:
+                self.set_dir_servo_angle(MAX_ANGLE)
+                logging.debug(angle)
+                angle = MAX_ANGLE
+                self.forward(30)
+            elif position == -0.5:
+                self.set_dir_servo_angle(MIN_ANGLE)
+                logging.debug(angle)
+                angle = MIN_ANGLE
+                self.forward(30)
+            elif position == 0:
+                self.set_dir_servo_angle(0)
+                logging.debug(angle)
+                angle = 0
+                self.forward(30)
+        else:            
+            self.stop()
     
     def consumer(self, bus, delay):
 
@@ -465,26 +486,93 @@ if __name__ == "__main__":
     s = Sensing()
     i = Intrepet()
     c = Controller()
-    sensor_values_bus = broadcast.broadcast()
-    interpreter_bus = broadcast.broadcast()
 
-    # Set delay times for each function
-    sensor_delay = 0.01
-    interpreter_delay = 0.02
-    control_delay = 0.03
-    
-    # Set up and run the functions concurrently
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        # Submit tasks to the executor
-        eSensor = executor.submit(s.producer, sensor_values_bus, sensor_delay)
-        eInterpreter =  executor.submit(i.consumer_producer, sensor_values_bus, interpreter_bus, interpreter_delay)
-        eControl = executor.submit(c.consumer, interpreter_bus, control_delay)
-        c.forward(30)
-        try:
-            # This will raise any exceptions caught by the executor
-            sensor_result = eSensor.result()
-            interpreter_result = eInterpreter.result()
-            control_result = eControl.result()
-        except Exception as e:
-            print(f"An error occurred: {e}")
+    # Initiate data and termination busses
+    bSensor = rr.Bus(s.get_grayscale_data(), "Grey Scale Bus")
+    bObstacle = rr.Bus(c.obstacle_avoidance(), "Obstacle Bus")
+    bInterpret = rr.Bus(i.process_sensor_data(s.get_grayscale_data()), "Interpret Bus")
+    bControl = rr.Bus(c.steering_angle(i.process_sensor_data(s.get_grayscale_data()), c.obstacle_avoidance()), "Control bus")
+    bTerminate = rr.Bus(0, "Termination Bus")
+
+    # Wrap the data Grey Scale into a producer
+    readSensor = rr.Producer(
+            s.get_grayscale_data,  # function that will generate data
+            bSensor,  # output data bus
+            0.05,  # delay between data generation cycles
+            bTerminate,  # bus to watch for termination signal
+            "Read Grey Scale Data")
+
+    # Wrap the data Obstacle Avoidance into a producer
+    controlAvoidance = rr.Producer(c.obstacle_avoidance,bObstacle, 0.05,  bTerminate, "Obstacle Avoidance")
+
+    # Wrap the data interpreter into a consumer-producer
+    interpretData = rr.ConsumerProducer(
+            i.process_sensor_data,  # function that will process data
+            bSensor,  # input data buses
+            bInterpret,  # output data bus
+            0.05,  # delay between data control cycles
+            bTerminate,  # bus to watch for termination signal
+            "Interpret Grey Scale Data")
+
+    # Wrap the data controlPiCar into a consumer
+    controlPiCar = rr.Consumer(
+            c.steering_angle,  # function that will process data
+            (bInterpret, bObstacle),  # input data buses
+            0.05,  # delay between data control cycles
+            bTerminate,  # bus to watch for termination signal
+            "Control PiCar")
+
+    # Make a printer that returns the most recent Sensor, Interpret and Control data
+    printBuses = rr.Printer(
+            (bSensor, bObstacle, bInterpret, bControl, bTerminate),  # input data buses
+            0.25,  # delay between printing cycles
+            bTerminate,  # bus to watch for termination signal
+            "Print raw and derived data",  # Name of printer
+            "Data bus readings are: ")  # Prefix for output
+
+    # Make a timer (a special kind of producer) that turns on the termination
+    # bus when it triggers
+    terminationTimer = rr.Timer(
+            bTerminate,  # Output data bus
+            10,  # Duration
+            0.01,  # Delay between checking for termination time
+            bTerminate,  # Bus to check for termination signal
+            "Termination timer")  # Name of this timer
+
+    """ Fifth Part: Concurrent execution """
+
+    # Create a list of producer-consumers to execute concurrently
+    producer_consumer_list = [readSensor,
+                                interpretData,
+                                controlPiCar,
+                                controlAvoidance, 
+                                printBuses,
+                                terminationTimer]
+
+    #Execute the list of producer-consumers concurrently
+    rr.runConcurrently(producer_consumer_list)
+
+    #WEEK 4 CODE BELOW!!!!!!
+    #   sensor_values_bus = broadcast.broadcast()
+    #     interpreter_bus = broadcast.broadcast()
+
+    #     # Set delay times for each function
+    #     sensor_delay = 0.01
+    #     interpreter_delay = 0.02
+    #     control_delay = 0.03
+        
+    #     # Set up and run the functions concurrently
+    #     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    #         # Submit tasks to the executor
+    #         eSensor = executor.submit(s.producer, sensor_values_bus, sensor_delay)
+    #         eInterpreter =  executor.submit(i.consumer_producer, sensor_values_bus, interpreter_bus, interpreter_delay)
+    #         eControl = executor.submit(c.consumer, interpreter_bus, control_delay)
+    #         c.forward(30)
+    #         try:
+    #             # This will raise any exceptions caught by the executor
+    #             sensor_result = eSensor.result()
+    #             interpreter_result = eInterpreter.result()
+    #             control_result = eControl.result()
+    #         except Exception as e:
+    #             print(f"An error occurred: {e}") 
 
